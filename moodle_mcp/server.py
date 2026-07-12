@@ -127,8 +127,8 @@ def get_course_overview(course: str) -> dict[str, Any]:
             file_contents = [c for c in (module.get("contents") or []) if c.get("type") == "file"]
             if file_contents:
                 multi = len(file_contents) > 1
-                for c in file_contents:
-                    fn = c.get("filename", "")
+                for fc in file_contents:
+                    fn = fc.get("filename", "")
                     cls = classify.classify_item(mod_name, fn, section_name, modname)
                     add(fn if multi else (mod_name or fn), section_name, modname, cls)
             else:
