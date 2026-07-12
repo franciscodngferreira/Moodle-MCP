@@ -45,11 +45,24 @@ def _safe_filename(name: str) -> str:
     return name or "unnamed"
 
 
-def _file_dest(files_dir: Path, cid: str, filename: str) -> Path:
-    """On-disk path for a file, namespaced by module id so identically-named
-    files in different modules never collide (or race under concurrency)."""
-    cmid = cid.split(":", 1)[0]
-    return files_dir / f"{cmid}__{_safe_filename(filename)}"
+def content_cid(cmid: Any, filepath: str, filename: str) -> str:
+    """Stable id for a file content. Includes filepath so two files with the same
+    basename in different subfolders of one module (e.g. per-year exams named
+    identically) stay distinct instead of colliding."""
+    return f"{cmid}:{(filepath or '/')}{filename}"
+
+
+def _cid_key(cid: str) -> str:
+    """Flatten a cid (which may contain '/') into one safe filesystem token."""
+    return _UNSAFE.sub("_", cid).strip("._ ") or "unnamed"
+
+
+def _file_dest(files_dir: Path, cid: str) -> Path:
+    """On-disk path derived solely from the cid, so it's unique per content
+    (module id + filepath + filename) and collision/race free under concurrency."""
+    cmid, _, rel = cid.partition(":")
+    flat = _UNSAFE.sub("_", rel).strip("._ ") or "unnamed"
+    return files_dir / f"{cmid}__{flat}"
 
 
 @dataclass
@@ -241,7 +254,7 @@ def search(query: str, courseid: int | None = None, limit: int = 20) -> list[dic
 
 
 def get_material_text(courseid: int, cid: str) -> str | None:
-    path = _course_dir(courseid) / "text" / f"{_safe_filename(cid)}.txt"
+    path = _course_dir(courseid) / "text" / f"{_cid_key(cid)}.txt"
     if path.exists():
         return path.read_text(encoding="utf-8", errors="replace")
     return None
@@ -250,7 +263,7 @@ def get_material_text(courseid: int, cid: str) -> str | None:
 # -- sync ------------------------------------------------------------------
 def _write_text(text_dir: Path, cid: str, text: str) -> None:
     text_dir.mkdir(parents=True, exist_ok=True)
-    (text_dir / f"{_safe_filename(cid)}.txt").write_text(text, encoding="utf-8")
+    (text_dir / f"{_cid_key(cid)}.txt").write_text(text, encoding="utf-8")
 
 
 def _download_worker(client: MoodleClient, task: dict[str, Any], text_dir: Path):
@@ -290,7 +303,7 @@ def sync_course(
     files_dir = course_dir / "files"
     text_dir = course_dir / "text"
 
-    pending: list[dict[str, Any]] = []
+    pending: dict[str, dict[str, Any]] = {}  # keyed by cid -> one task, no dup dest
     for section in contents:
         section_name = html.unescape(section.get("name", ""))
         for module in section.get("modules", []):
@@ -306,11 +319,11 @@ def sync_course(
                 multi = len(file_contents) > 1
                 for c in file_contents:
                     filename = c.get("filename", "file")
-                    cid = f"{cmid}:{filename}"
+                    cid = content_cid(cmid, c.get("filepath", "/"), filename)
                     timemodified = int(c.get("timemodified", 0) or 0)
                     filesize = int(c.get("filesize", 0) or 0)
                     fileurl = c.get("fileurl", "")
-                    dest = _file_dest(files_dir, cid, filename)
+                    dest = _file_dest(files_dir, cid)
                     prev = prev_items.get(cid)
                     # Classify per file (by filename) so a folder of exams counts
                     # each exam, not the folder as one item.
@@ -326,12 +339,12 @@ def sync_course(
                         result.skipped += 1
                         continue
 
-                    pending.append({
+                    pending[cid] = {
                         "cid": cid, "fileurl": fileurl, "dest": dest, "display": display,
                         "category": fcls.category, "confidence": fcls.confidence,
                         "modname": modname, "section": section_name,
                         "timemodified": timemodified, "filesize": filesize, "filename": filename,
-                    })
+                    }
 
             elif url_contents:
                 cid = str(cmid)
@@ -357,7 +370,7 @@ def sync_course(
     if pending:
         files_dir.mkdir(parents=True, exist_ok=True)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [pool.submit(_download_worker, client, t, text_dir) for t in pending]
+            futures = [pool.submit(_download_worker, client, t, text_dir) for t in pending.values()]
             for fut in as_completed(futures):
                 item, status, info = fut.result()
                 if item is None:
@@ -371,16 +384,13 @@ def sync_course(
     # Prune orphaned items: delete their cached file + extracted text.
     removed = set(prev_items) - set(items)
     for cid in removed:
-        prev = prev_items.get(cid, {})
-        fn = prev.get("filename")
-        if fn:
-            fp = _file_dest(files_dir, cid, fn)
-            if fp.exists():
-                try:
-                    fp.unlink()
-                except OSError:
-                    pass
-        tp = text_dir / f"{_safe_filename(cid)}.txt"
+        fp = _file_dest(files_dir, cid)
+        if fp.exists():
+            try:
+                fp.unlink()
+            except OSError:
+                pass
+        tp = text_dir / f"{_cid_key(cid)}.txt"
         if tp.exists():
             try:
                 tp.unlink()

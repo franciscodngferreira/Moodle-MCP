@@ -64,7 +64,7 @@ def test_overview_items_carry_cid():
     # get_material needs a cid; the overview must expose one per item.
     ov = server.get_course_overview("Autonomous Mobile Robots")
     assert all("cid" in it for it in ov["items"])
-    assert any(it["cid"] == "1:CS2_exam_2019.pdf" for it in ov["items"])
+    assert any(it["cid"] == "1:/CS2_exam_2019.pdf" for it in ov["items"])
 
 
 def test_resolve_ambiguous_raises():

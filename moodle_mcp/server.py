@@ -140,8 +140,8 @@ def get_course_overview(course: str) -> dict[str, Any]:
                 for fc in file_contents:
                     fn = fc.get("filename", "")
                     cls = classify.classify_item(mod_name, fn, section_name, modname)
-                    add(f"{cmid}:{fn}", fn if multi else (mod_name or fn),
-                        section_name, modname, cls)
+                    add(cache.content_cid(cmid, fc.get("filepath", "/"), fn),
+                        fn if multi else (mod_name or fn), section_name, modname, cls)
             else:
                 add(str(cmid), mod_name, section_name, modname,
                     classify.classify_item(mod_name, "", section_name, modname))
@@ -177,8 +177,13 @@ def _quizzes_for(client: MoodleClient, courseid: int, notes: list[str]) -> list[
         return []
 
     out: list[dict[str, Any]] = []
-    can_attempts = client.has_function("mod_quiz_get_user_attempts")
-    for q in data.get("quizzes", []):
+    quizzes = data.get("quizzes", [])
+    # Attempt counts are one live call per quiz; skip on quiz-archive courses
+    # (dozens of quizzes) to avoid an N+1 stall.
+    can_attempts = client.has_function("mod_quiz_get_user_attempts") and len(quizzes) <= 30
+    if client.has_function("mod_quiz_get_user_attempts") and len(quizzes) > 30:
+        notes.append(f"{len(quizzes)} quizzes — attempt counts omitted (too many to fetch).")
+    for q in quizzes:
         attempts = None
         if can_attempts:
             try:

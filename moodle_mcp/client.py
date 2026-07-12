@@ -230,5 +230,7 @@ class MoodleClient:
                     for chunk in resp.iter_bytes():
                         fh.write(chunk)
         except httpx.HTTPError as exc:
-            raise MoodleAPIError(f"download {fileurl}: {exc}") from exc
+            # Do NOT interpolate exc (its message can contain the tokened request
+            # URL). Report the caller-supplied (untokened) fileurl + error type.
+            raise MoodleAPIError(f"download {fileurl}: {type(exc).__name__}") from exc
         return dest

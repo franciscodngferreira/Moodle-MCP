@@ -99,8 +99,9 @@ def test_changed_timemodified_redownloads():
 def test_prune_removed_item_deletes_from_disk():
     client = FakeClient(_contents())
     cache.sync_course(client, 42, "Analysis")
-    fpath = cache._file_dest(cache._course_dir(42) / "files", "1:vorlesung1.txt", "vorlesung1.txt")
-    tpath = cache._course_dir(42) / "text" / f"{cache._safe_filename('1:vorlesung1.txt')}.txt"
+    cid = cache.content_cid(1, "/", "vorlesung1.txt")
+    fpath = cache._file_dest(cache._course_dir(42) / "files", cid)
+    tpath = cache._course_dir(42) / "text" / f"{cache._cid_key(cid)}.txt"
     assert fpath.exists() and tpath.exists()
 
     client._contents = _contents(include_file=False)
@@ -108,6 +109,25 @@ def test_prune_removed_item_deletes_from_disk():
     assert r2.pruned == 1
     assert not fpath.exists()   # prune actually deletes the cached file
     assert not tpath.exists()   # and its extracted text
+
+
+def test_same_basename_different_filepath_stay_distinct():
+    # Two exams named identically in different subfolders must NOT collide.
+    contents = [{"name": "Exams", "modules": [{
+        "id": 9, "modname": "folder", "name": "Old exams", "contents": [
+            {"type": "file", "filename": "Final_Exam.pdf", "filepath": "/2024/",
+             "fileurl": "https://m.test/a", "timemodified": 1, "filesize": 5},
+            {"type": "file", "filename": "Final_Exam.pdf", "filepath": "/2025/",
+             "fileurl": "https://m.test/b", "timemodified": 1, "filesize": 5},
+        ],
+    }]}]
+    client = FakeClient(contents, body="exam text")
+    r = cache.sync_course(client, 7, "Course")
+    assert r.items == 2          # both exams survive as distinct items
+    assert r.downloaded == 2
+    assert len(client.downloads) == 2
+    idx = cache.load_index(7)["items"]
+    assert len(idx) == 2         # two distinct cids in the index
 
 
 def test_url_module_not_downloaded():

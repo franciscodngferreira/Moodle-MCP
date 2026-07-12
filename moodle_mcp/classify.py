@@ -16,7 +16,7 @@ the "how many problem sets" answer the user actually cares about.
     modname == quiz? --------> ("quiz", "high")
             |
             v
-    for category in ORDER:            # practice_exam > solution > problem_set > lecture
+    for category in ORDER:            # solution > practice_exam > problem_set > lecture
         regex matches title?  ------> (category, "high")
         regex matches section? -----> (category, "medium")
             |
