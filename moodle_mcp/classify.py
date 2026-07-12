@@ -40,6 +40,14 @@ _MODNAME_CATEGORY = {
     "assign": "problem_set",
 }
 
+# Module types that are never study materials — never let their (often
+# keyword-laden) titles land in a study bucket. "Klausureinsicht" is a `choice`
+# module (exam-viewing signup), not a practice exam.
+_NONMATERIAL_MODNAMES = {
+    "forum", "choice", "feedback", "chat", "wiki", "glossary",
+    "attendance", "questionnaire", "survey", "scheduler",
+}
+
 CATEGORIES = ("lecture", "problem_set", "practice_exam", "solution", "quiz", "other")
 
 
@@ -69,6 +77,8 @@ def classify(
 ) -> Classification:
     """Classify one course item. See module docstring for the decision tree."""
     modname = (modname or "").lower()
+    if modname in _NONMATERIAL_MODNAMES:
+        return Classification("other", "low")
     if modname in _MODNAME_CATEGORY:
         return Classification(_MODNAME_CATEGORY[modname], "high")
 
@@ -105,6 +115,8 @@ def classify_item(
     Falls back to the module name when the filename alone is uninformative.
     """
     modname_l = (modname or "").lower()
+    if modname_l in _NONMATERIAL_MODNAMES:
+        return Classification("other", "low")
     if modname_l in _MODNAME_CATEGORY:
         return Classification(_MODNAME_CATEGORY[modname_l], "high")
 

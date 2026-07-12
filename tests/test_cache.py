@@ -96,12 +96,18 @@ def test_changed_timemodified_redownloads():
     assert client.downloads == ["https://m.test/f/1"]
 
 
-def test_prune_removed_item():
+def test_prune_removed_item_deletes_from_disk():
     client = FakeClient(_contents())
     cache.sync_course(client, 42, "Analysis")
+    fpath = cache._file_dest(cache._course_dir(42) / "files", "1:vorlesung1.txt", "vorlesung1.txt")
+    tpath = cache._course_dir(42) / "text" / f"{cache._safe_filename('1:vorlesung1.txt')}.txt"
+    assert fpath.exists() and tpath.exists()
+
     client._contents = _contents(include_file=False)
     r2 = cache.sync_course(client, 42, "Analysis")
     assert r2.pruned == 1
+    assert not fpath.exists()   # prune actually deletes the cached file
+    assert not tpath.exists()   # and its extracted text
 
 
 def test_url_module_not_downloaded():

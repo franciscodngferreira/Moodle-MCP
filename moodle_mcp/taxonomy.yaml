@@ -1,56 +1,66 @@
 # Classifier taxonomy for the course-content categorizer.
 #
-# Categories are checked in the ORDER listed below (first match wins), so more
-# specific / exam-relevant buckets come first. Each entry is a list of
-# case-insensitive regex fragments matched against an item's title (and, at
+# Categories are checked in the ORDER listed below (first match wins). SOLUTION
+# is first on purpose: an exam/exercise solution file (e.g. "CS2_exam_Lsg.pdf")
+# should count as a solution, not double-count as a practice exam. Each entry is
+# a case-insensitive regex fragment matched against an item's title (and, at
 # lower confidence, its section name). Tuned for ETH's bilingual (DE + EN)
-# naming. Add fragments per course as needed — this file is config, not code.
-
-practice_exam:
-  - probeklausur
-  - musterklausur
-  - pr(u|ü)fung
-  - alt(e|klausur)
-  - past[\s_-]*exam
-  - old[\s_-]*exam
-  - mock[\s_-]*exam
-  - practice[\s_-]*exam
-  - sample[\s_-]*exam
-  - exam
-  - klausur
-  - repetition
+# naming AND ETH filename abbreviations (VL, RU, Aufg, Lsg, PK). Fragments use
+# \b / trailing \d to avoid matching inside unrelated words. Values are
+# single-quoted so YAML keeps backslashes and brackets literal.
+# This file is config, not code — add fragments per course as needed.
 
 solution:
-  - l(ö|oe)sung
-  - musterl(ö|oe)sung
-  - solution
-  - solutions
-  - answer[\s_-]*key
-  - sol\b
+  - 'l(ö|oe)sung'
+  - 'musterl(ö|oe)sung'
+  - '\blsg\b'
+  - '[_-]lsg'
+  - '\bsol\b'
+  - '[_-]sol\b'
+  - 'solution'
+  - 'answer[\s_-]*key'
+
+practice_exam:
+  - 'probeklausur'
+  - 'musterklausur'
+  - 'altklausur'
+  - '\bklausur\b'
+  - '\bpr(ü|ue)fung\b'
+  - 'past[\s_-]*exams?'
+  - 'old[\s_-]*exams?'
+  - 'mock[\s_-]*exams?'
+  - 'practice[\s_-]*exams?'
+  - 'sample[\s_-]*exams?'
+  - '\bexams?\b'
+  - '\bPK[\s_]?\d'
 
 problem_set:
-  - (ü|ue)bung
-  - serie
-  - blatt
-  - exercise
-  - problem[\s_-]*set
-  - aufgabe
-  - assignment
-  - homework
-  - tutorial
-  - problemset
-  - sheet
+  - '(ü|ue)bung'
+  - '\bserie'
+  - '\bblatt'
+  - 'exercise'
+  - 'problem[\s_-]*set'
+  - 'problemset'
+  - 'aufgabe'
+  - '\baufg'
+  - 'assignment'
+  - 'homework'
+  - 'tutorial'
+  - '\bsheet\b'
+  - '\bRU[\s_]?\d'
+  - '\bUE[\s_]?\d'
 
 lecture:
-  - vorlesung
-  - lecture
-  - slide
-  - folien
-  - skript
-  - script
-  - handout
-  - kapitel
-  - chapter
-  - notes?
-  - zusammenfassung
-  - summary
+  - 'vorlesung'
+  - '\bVL[\s_]?\d'
+  - 'lecture'
+  - 'slides?'
+  - 'folien'
+  - 'skript'
+  - 'script'
+  - 'handout'
+  - 'kapitel'
+  - 'chapter'
+  - '\bnotes?\b'
+  - 'zusammenfassung'
+  - 'summary'

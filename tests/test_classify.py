@@ -35,6 +35,23 @@ def test_title_classification(title, expected):
         assert c.confidence == "low"
 
 
+@pytest.mark.parametrize(
+    "filename,expected",
+    [
+        ("VL3_intro.pdf", "lecture"),        # ETH lecture abbrev
+        ("VL_02.pdf", "lecture"),
+        ("RU05_Aufg.pdf", "problem_set"),    # Rechenübung + Aufgabe
+        ("Serie3.pdf", "problem_set"),
+        ("PK1_2023.pdf", "practice_exam"),   # Probeklausur abbrev
+        ("CS2_exam_Lsg.pdf", "solution"),    # solution WINS over exam
+        ("Serie3_Lsg.pdf", "solution"),      # solution WINS over problem_set
+        ("uebung2_loesung.pdf", "solution"),
+    ],
+)
+def test_eth_filename_abbreviations(filename, expected):
+    assert classify(filename).category == expected
+
+
 def test_modname_quiz_wins():
     c = classify("Weekly check", modname="quiz")
     assert c.category == "quiz"
@@ -54,3 +71,17 @@ def test_section_match_is_medium_confidence():
 def test_unknown_is_other_low():
     c = classify("xyz", section="misc")
     assert c == ("other", "low")
+
+
+def test_nonmaterial_modname_is_other():
+    from moodle_mcp.classify import classify_item
+
+    # A "choice" module named "Klausureinsicht" must NOT become a practice exam.
+    assert classify("Klausureinsicht", modname="choice") == ("other", "low")
+    assert classify_item("Klausureinsicht", "", "", "choice") == ("other", "low")
+    assert classify_item("Discussion", "", "", "forum") == ("other", "low")
+
+
+def test_no_false_positive_on_example():
+    # \bexams?\b must not fire on "example".
+    assert classify("example_data.pdf").category != "practice_exam"

@@ -13,7 +13,9 @@ Tools:
 """
 from __future__ import annotations
 
+import atexit
 import html
+import logging
 import time
 from typing import Any
 
@@ -27,7 +29,14 @@ from .client import (
     MoodleFunctionUnavailable,
 )
 
-mcp = FastMCP("moodle-study")
+# SECURITY: file downloads carry the wstoken as a ?token= query param. httpx logs
+# request URLs at INFO, and a stdio MCP server's stderr is captured by the host —
+# so an INFO httpx log would write the token to the host's logs. Force these
+# loggers to WARNING so the tokened URL is never emitted.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+mcp = FastMCP("moodle-study", log_level="WARNING")
 
 _client: MoodleClient | None = None
 _courses_cache: list[dict[str, Any]] | None = None
@@ -112,10 +121,10 @@ def get_course_overview(course: str) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     counts: dict[str, int] = {cat: 0 for cat in classify.CATEGORIES}
 
-    def add(name: str, section_name: str, modname: str, cls: classify.Classification) -> None:
+    def add(cid: str, name: str, section_name: str, modname: str, cls: classify.Classification) -> None:
         counts[cls.category] = counts.get(cls.category, 0) + 1
         items.append({
-            "name": name, "section": section_name, "modname": modname,
+            "cid": cid, "name": name, "section": section_name, "modname": modname,
             "category": cls.category, "confidence": cls.confidence,
         })
 
@@ -124,15 +133,17 @@ def get_course_overview(course: str) -> dict[str, Any]:
         for module in section.get("modules", []):
             modname = module.get("modname", "")
             mod_name = html.unescape(module.get("name", ""))
+            cmid = module.get("id", 0)
             file_contents = [c for c in (module.get("contents") or []) if c.get("type") == "file"]
             if file_contents:
                 multi = len(file_contents) > 1
                 for fc in file_contents:
                     fn = fc.get("filename", "")
                     cls = classify.classify_item(mod_name, fn, section_name, modname)
-                    add(fn if multi else (mod_name or fn), section_name, modname, cls)
+                    add(f"{cmid}:{fn}", fn if multi else (mod_name or fn),
+                        section_name, modname, cls)
             else:
-                add(mod_name, section_name, modname,
+                add(str(cmid), mod_name, section_name, modname,
                     classify.classify_item(mod_name, "", section_name, modname))
 
     notes: list[str] = []
@@ -226,15 +237,13 @@ def sync_course(course: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def list_quizzes(course: str) -> list[dict[str, Any]]:
+def list_quizzes(course: str) -> dict[str, Any]:
     """List a course's quizzes with how many attempts you've made on each."""
     client = get_client()
     c = _resolve_course(course)
     notes: list[str] = []
     quizzes = _quizzes_for(client, int(c["id"]), notes)
-    if not quizzes and notes:
-        return [{"note": n} for n in notes]
-    return quizzes
+    return {"course": c.get("fullname"), "quizzes": quizzes, "notes": notes}
 
 
 @mcp.tool()
@@ -254,6 +263,12 @@ def get_material(course: str, cid: str) -> dict[str, Any]:
     if text is None:
         return {"error": f"No cached text for cid={cid}. Run sync_course first."}
     return {"cid": cid, "chars": len(text), "text": text}
+
+
+@atexit.register
+def _close_client() -> None:
+    if _client is not None:
+        _client.close()
 
 
 def main() -> None:

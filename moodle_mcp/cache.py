@@ -27,6 +27,7 @@ import html
 import json
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,13 @@ def _safe_filename(name: str) -> str:
     name = name.replace("\\", "/").split("/")[-1]
     name = _UNSAFE.sub("_", name).strip(". ")
     return name or "unnamed"
+
+
+def _file_dest(files_dir: Path, cid: str, filename: str) -> Path:
+    """On-disk path for a file, namespaced by module id so identically-named
+    files in different modules never collide (or race under concurrency)."""
+    cmid = cid.split(":", 1)[0]
+    return files_dir / f"{cmid}__{_safe_filename(filename)}"
 
 
 @dataclass
@@ -240,8 +248,39 @@ def get_material_text(courseid: int, cid: str) -> str | None:
 
 
 # -- sync ------------------------------------------------------------------
-def sync_course(client: MoodleClient, courseid: int, fullname: str = "") -> SyncResult:
-    """Download + extract + index a course. Incremental by timemodified."""
+def _write_text(text_dir: Path, cid: str, text: str) -> None:
+    text_dir.mkdir(parents=True, exist_ok=True)
+    (text_dir / f"{_safe_filename(cid)}.txt").write_text(text, encoding="utf-8")
+
+
+def _download_worker(client: MoodleClient, task: dict[str, Any], text_dir: Path):
+    """Thread worker: download one file + extract text. Returns (Item|None, status, info)."""
+    try:
+        client.download_file(task["fileurl"], task["dest"])
+    except MoodleAPIError as exc:
+        return None, "error", f"{task['filename']}: {exc}"
+    text, ok = extract_text(task["dest"])
+    if ok:
+        _write_text(text_dir, task["cid"], text)
+    item = Item(
+        cid=task["cid"], name=task["display"], category=task["category"],
+        confidence=task["confidence"], kind="file", modname=task["modname"],
+        section=task["section"], timemodified=task["timemodified"],
+        filesize=task["filesize"], filename=task["filename"], fileurl=task["fileurl"],
+        text_extracted=ok, text_chars=len(text),
+    )
+    return item, ("ok" if ok else "extract_fail"), task["filename"]
+
+
+def sync_course(
+    client: MoodleClient, courseid: int, fullname: str = "", *, max_workers: int = 6
+) -> SyncResult:
+    """Download + extract + index a course. Incremental by timemodified.
+
+    Two phases: walk the contents (reusing unchanged files, queuing changed ones),
+    then download the queue concurrently — a first sync of a large course is IO
+    bound, so parallel GETs turn minutes into tens of seconds.
+    """
     result = SyncResult(courseid=courseid, fullname=fullname)
     contents = client.get_course_contents(courseid)
 
@@ -251,17 +290,14 @@ def sync_course(client: MoodleClient, courseid: int, fullname: str = "") -> Sync
     files_dir = course_dir / "files"
     text_dir = course_dir / "text"
 
-    def write_text(cid: str, text: str) -> None:
-        text_dir.mkdir(parents=True, exist_ok=True)
-        (text_dir / f"{_safe_filename(cid)}.txt").write_text(text, encoding="utf-8")
-
+    pending: list[dict[str, Any]] = []
     for section in contents:
-        section_name = section.get("name", "")
+        section_name = html.unescape(section.get("name", ""))
         for module in section.get("modules", []):
             modname = module.get("modname", "")
             name = html.unescape(module.get("name", ""))
             cmid = module.get("id", 0)
-            cls = classify.classify(name, section_name, modname)
+            cls = classify.classify_item(name, "", section_name, modname)
             contents_list = module.get("contents", []) or []
             file_contents = [c for c in contents_list if c.get("type") == "file"]
             url_contents = [c for c in contents_list if c.get("type") == "url"]
@@ -274,7 +310,7 @@ def sync_course(client: MoodleClient, courseid: int, fullname: str = "") -> Sync
                     timemodified = int(c.get("timemodified", 0) or 0)
                     filesize = int(c.get("filesize", 0) or 0)
                     fileurl = c.get("fileurl", "")
-                    dest = files_dir / _safe_filename(filename)
+                    dest = _file_dest(files_dir, cid, filename)
                     prev = prev_items.get(cid)
                     # Classify per file (by filename) so a folder of exams counts
                     # each exam, not the folder as one item.
@@ -290,32 +326,19 @@ def sync_course(client: MoodleClient, courseid: int, fullname: str = "") -> Sync
                         result.skipped += 1
                         continue
 
-                    try:
-                        client.download_file(fileurl, dest)
-                    except MoodleAPIError as exc:
-                        result.errors.append(f"{filename}: {exc}")
-                        continue
-                    text, ok = extract_text(dest)
-                    if ok:
-                        write_text(cid, text)
-                    else:
-                        result.extract_failures.append(filename)
-                    items[cid] = Item(
-                        cid=cid, name=display, category=fcls.category,
-                        confidence=fcls.confidence, kind="file", modname=modname,
-                        section=section_name, timemodified=timemodified, filesize=filesize,
-                        filename=filename, fileurl=fileurl, text_extracted=ok,
-                        text_chars=len(text),
-                    )
-                    result.downloaded += 1
+                    pending.append({
+                        "cid": cid, "fileurl": fileurl, "dest": dest, "display": display,
+                        "category": fcls.category, "confidence": fcls.confidence,
+                        "modname": modname, "section": section_name,
+                        "timemodified": timemodified, "filesize": filesize, "filename": filename,
+                    })
 
             elif url_contents:
-                c = url_contents[0]
                 cid = str(cmid)
                 items[cid] = Item(
                     cid=cid, name=name, category=cls.category, confidence=cls.confidence,
                     kind="url", modname=modname, section=section_name,
-                    external_url=c.get("fileurl", ""),
+                    external_url=url_contents[0].get("fileurl", ""),
                 )
                 result.links += 1
 
@@ -323,24 +346,55 @@ def sync_course(client: MoodleClient, courseid: int, fullname: str = "") -> Sync
                 cid = str(cmid)
                 text = _strip_html(module["description"])
                 if text:
-                    write_text(cid, text)
+                    _write_text(text_dir, cid, text)
                 items[cid] = Item(
                     cid=cid, name=name, category=cls.category, confidence=cls.confidence,
                     kind="page", modname=modname, section=section_name,
                     text_extracted=bool(text), text_chars=len(text),
                 )
 
-    # Prune orphaned cached files/text for items no longer upstream.
+    # Phase 2: download changed/new files concurrently (IO-bound).
+    if pending:
+        files_dir.mkdir(parents=True, exist_ok=True)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_download_worker, client, t, text_dir) for t in pending]
+            for fut in as_completed(futures):
+                item, status, info = fut.result()
+                if item is None:
+                    result.errors.append(info)
+                    continue
+                items[item.cid] = item
+                result.downloaded += 1
+                if status == "extract_fail":
+                    result.extract_failures.append(info)
+
+    # Prune orphaned items: delete their cached file + extracted text.
     removed = set(prev_items) - set(items)
+    for cid in removed:
+        prev = prev_items.get(cid, {})
+        fn = prev.get("filename")
+        if fn:
+            fp = _file_dest(files_dir, cid, fn)
+            if fp.exists():
+                try:
+                    fp.unlink()
+                except OSError:
+                    pass
+        tp = text_dir / f"{_safe_filename(cid)}.txt"
+        if tp.exists():
+            try:
+                tp.unlink()
+            except OSError:
+                pass
     result.pruned = len(removed)
 
     result.items = len(items)
     _save_index(courseid, fullname, items)
 
-    rows: list[tuple[int, str, str, str, str]] = []
-    for cid, it in items.items():
-        body = get_material_text(courseid, cid) or ""
-        rows.append((courseid, cid, it.name, it.category, body))
+    rows: list[tuple[int, str, str, str, str]] = [
+        (courseid, cid, it.name, it.category, get_material_text(courseid, cid) or "")
+        for cid, it in items.items()
+    ]
     _reindex_course(courseid, rows)
 
     return result
