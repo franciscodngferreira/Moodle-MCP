@@ -31,15 +31,41 @@ pip install -e .
 
 ### 1. Get your token (once)
 
-ETH uses SSO, so you capture a token through the browser:
+ETH uses SSO, so you need a Moodle **web-service token** (a 32-character hex
+string). The token is stored in your OS keyring (never in a file, never in git)
+and is long-lived.
+
+**Easiest — copy it straight from Moodle (recommended):**
+
+1. Log into Moodle in your browser.
+2. Go to your profile → **Preferences** → **Security keys**
+   (URL: `<your-moodle>/user/managetoken.php`).
+3. Copy the token listed for **"Moodle mobile web service"**.
+4. Hand it to the tool directly:
+
+   ```bash
+   python -m moodle_mcp auth --token <paste-token-here>
+   ```
+
+This works in any browser and skips the redirect step entirely.
+
+**Fallback — browser capture flow:**
 
 ```bash
 python -m moodle_mcp auth
 ```
 
-It opens a browser, you log in with SSO, and it hands back a
-`moodlemobile://token=...` value — paste that back into the prompt. The token is
-stored in your OS keyring (never in a file, never in git) and is long-lived.
+It opens a browser, you log in with SSO, and Moodle tries to hand back the token
+via a `moodlemobile://token=...` redirect. Your browser will show an error like
+**"address invalid"** or *"Safari cannot open the page because the address is
+invalid"* — that's expected (no app is registered for the `moodlemobile://`
+scheme). Copy that whole URL from the address bar, or from DevTools
+(Network tab → the `launch.php` response containing `token=`), and paste it back
+into the prompt.
+
+> Most browsers (Safari and Chrome included) **hide** the failed
+> `moodlemobile://` URL instead of showing it, so there's often nothing to copy.
+> If you hit that, use the Security keys method above instead.
 
 Verify:
 
